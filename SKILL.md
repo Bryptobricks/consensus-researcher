@@ -29,6 +29,12 @@ Fire site-scoped web searches simultaneously. Use `web_search` with site-scoping
 
 Fetch the top 2-3 results per platform via `web_fetch`. Prioritize threads/pages with high engagement (comment count, upvotes, detailed responses).
 
+**Reddit Deep Read (CRITICAL):** For Reddit threads, use the JSON endpoint instead of web_fetch:
+```
+curl -s -H "User-Agent: ConsensusResearch/1.0" "https://www.reddit.com/r/{subreddit}/comments/{id}/.json?limit=100"
+```
+This returns FULL comment bodies with scores, unlike web_fetch which only gets the OP text. Parse comment bodies and scores to extract real user experiences. This is where 60%+ of the signal lives — never skip this step for Reddit sources.
+
 For **Twitter/X complaints** (if API available): search `"[product/service name]" (broken OR terrible OR worst OR disappointed OR refund)` to surface failure patterns.
 
 ### Phase 2: Extract & Normalize Themes
