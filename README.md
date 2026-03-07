@@ -22,6 +22,11 @@ Instead of trusting any single source, this skill aggregates reviews from Reddit
 - **Data Sufficiency Gate** — Won't produce a confident score on thin data. LOW confidence = honest caveats.
 - **Research Freshness Tracking** — Category-specific decay (restaurants: 6mo, supplements: 2yr, durable goods: 3yr).
 - **Head-to-Head Comparison** — Simple differentiators between top 2 candidates: shared/unique strengths, issues, price winner.
+- **File-Based Cache** — MD5-keyed query cache (30min TTL, 2hr for quick mode). No wasted API calls on repeat queries.
+- **Auto-Save** — `--save` flag writes a readable markdown report + raw JSON to `memory/research/` with auto-generated filenames.
+- **Cost Tracking** — Counts every Brave Search and Reddit API call per run. Shows estimated cost in output and stderr.
+- **Product Watchlist** — Track products you care about. `watchlist check` re-runs quick research and detects changes in source counts.
+- **Comment Score Filter** — `--min-score N` drops low-upvote Reddit comments before analysis, cutting noise from large threads.
 
 ## Research Depth Modes
 
@@ -57,8 +62,22 @@ BRAVE_API_KEY=your_key node scripts/research.js "lion's mane" --depth deep --com
 # Quick product check
 BRAVE_API_KEY=your_key node scripts/research.js "USB-C hub" --depth quick
 
+# Auto-save results as markdown + JSON
+BRAVE_API_KEY=your_key node scripts/research.js "creatine monohydrate" --save
+
+# Filter out low-quality Reddit comments
+BRAVE_API_KEY=your_key node scripts/research.js "protein powder" --min-score 5
+
 # Check research freshness
 node scripts/research.js freshness ./memory/research/
+
+# Product watchlist
+node scripts/research.js watchlist add "Nutricost creatine" --note "daily supplement"
+node scripts/research.js watchlist check    # re-research all, detect changes
+node scripts/research.js watchlist          # show tracked products
+
+# Cache management
+node scripts/research.js cache clear        # clear all cached results
 ```
 
 **Requirements:** Node.js 18+, Brave Search API key ([free tier: 2K queries/mo](https://brave.com/search/api/))
@@ -69,7 +88,12 @@ node scripts/research.js freshness ./memory/research/
 consensus-research/
 ├── SKILL.md                      # Full skill spec (OpenClaw reads this)
 ├── scripts/
-│   └── research.js               # CLI data collection runner
+│   └── research.js               # CLI data collection runner (1,347 lines, zero deps)
+├── data/
+│   ├── cache/                    # MD5-keyed query cache (auto-managed)
+│   └── watchlist.json            # Product watchlist (created on first add)
+├── memory/
+│   └── research/                 # Auto-saved research reports (--save)
 └── references/
     ├── methodology.md            # Scoring framework, source weights, decay rates
     └── brand-intel.md            # Persistent brand reputation database
