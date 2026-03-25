@@ -13,18 +13,20 @@ const {
 const { dirname, join, resolve } = require('path');
 const crypto = require('crypto');
 
-const SCHEMA_VERSION = 'v3';
+// --- Lib modules (search fallback, Reddit resilience, feedback) ---
+const { search, getSearchCost, resetSearchApiCalls, getHealthSummary: getSearchHealth } = require('./lib/search');
+const { fetchRedditThread, extractRedditIds, getRedditApiCalls, resetRedditApiCalls, getRedditHealthSummary, cachePrune: pruneRedditCache } = require('./lib/reddit');
+const { addFeedback, getCalibrationNote, getFeedbackSummary, loadFeedback } = require('./lib/feedback');
+
+const SCHEMA_VERSION = 'v5';
 const BRAND_INTEL_SCHEMA_VERSION = 1;
 
-const BRAVE_API_URL = 'https://api.search.brave.com/res/v1/web/search';
-const BRAVE_KEY = process.env.BRAVE_API_KEY;
-const REDDIT_UA = 'ConsensusResearch/3.0';
-const MAX_COMMENT_LENGTH = 1000;
+const REDDIT_UA = 'ConsensusResearch/5.0';
 const MAX_CLAIM_QUOTE_LENGTH = 150;
-const BRAVE_COST_PER_QUERY = 0.005;
 
 const CACHE_DIR = resolve(process.cwd(), 'data/cache');
 const WATCHLIST_PATH = resolve(process.cwd(), 'data/watchlist.json');
+const CONFIG_PATH = resolve(process.cwd(), 'data/config.json');
 const DEFAULT_SAVE_DIR = resolve(process.cwd(), 'memory/research');
 const BRAND_INTEL_JSON_PATH = resolve(process.cwd(), 'references/brand-intel.json');
 const BRAND_INTEL_MD_PATH = resolve(process.cwd(), 'references/brand-intel.md');
@@ -387,60 +389,39 @@ function displayNameForTerm(term) {
     .join(' ');
 }
 
-const apiCalls = { brave: 0, reddit: 0, total: 0 };
-
-function trackBrave() {
-  apiCalls.brave++;
-  apiCalls.total++;
-}
-
-function trackReddit() {
-  apiCalls.reddit++;
-  apiCalls.total++;
-}
-
 function resetApiCalls() {
-  apiCalls.brave = 0;
-  apiCalls.reddit = 0;
-  apiCalls.total = 0;
+  resetSearchApiCalls();
+  resetRedditApiCalls();
 }
 
 function getApiCost() {
+  const searchCost = getSearchCost();
+  const redditCalls = getRedditApiCalls();
   return {
-    braveCalls: apiCalls.brave,
-    redditCalls: apiCalls.reddit,
-    totalCalls: apiCalls.total,
-    estimatedUSD: round(apiCalls.brave * BRAVE_COST_PER_QUERY, 3)
+    braveCalls: searchCost.braveCalls,
+    ddgCalls: searchCost.ddgCalls || 0,
+    redditCalls: redditCalls.total,
+    totalCalls: searchCost.totalCalls + redditCalls.total,
+    estimatedUSD: searchCost.estimatedUSD,
+    searchProvider: searchCost.braveCalls > 0 ? 'brave' : searchCost.ddgCalls > 0 ? 'ddg' : 'none'
   };
 }
 
 function toApiCostSummary(cost) {
   return {
     brave: cost.braveCalls,
+    ddg: cost.ddgCalls || 0,
     reddit: cost.redditCalls,
     total: cost.totalCalls,
-    estimatedUSD: cost.estimatedUSD
+    estimatedUSD: cost.estimatedUSD,
+    searchProvider: cost.searchProvider || 'unknown'
   };
 }
 
 function logApiCost() {
   const cost = getApiCost();
-  log(`API calls: ${cost.braveCalls} Brave + ${cost.redditCalls} Reddit = ${cost.totalCalls} total | Est. cost: ~$${cost.estimatedUSD.toFixed(3)}`);
-}
-
-let lastBrave = 0;
-let lastReddit = 0;
-
-async function braveRateLimit() {
-  const wait = 200 - (Date.now() - lastBrave);
-  if (wait > 0) await sleep(wait);
-  lastBrave = Date.now();
-}
-
-async function redditRateLimit() {
-  const wait = 1000 - (Date.now() - lastReddit);
-  if (wait > 0) await sleep(wait);
-  lastReddit = Date.now();
+  const provider = cost.searchProvider === 'ddg' ? ' (DDG fallback)' : '';
+  log(`API calls: ${cost.braveCalls} Brave + ${cost.ddgCalls} DDG + ${cost.redditCalls} Reddit = ${cost.totalCalls} total${provider} | Est. cost: ~$${cost.estimatedUSD.toFixed(3)}`);
 }
 
 function cacheKey(query, category, depth, opts = {}) {
@@ -510,7 +491,17 @@ function cacheClear() {
   return files.length;
 }
 
-const SUBCOMMANDS = new Set(['cache', 'watchlist']);
+const SUBCOMMANDS = new Set(['cache', 'watchlist', 'feedback', 'status']);
+
+function loadConfig() {
+  if (!existsSync(CONFIG_PATH)) return {};
+  try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); } catch { return {}; }
+}
+
+function saveConfig(data) {
+  ensureDir(dirname(CONFIG_PATH));
+  writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), 'utf8');
+}
 
 function parseArgs(argv) {
   const opts = {
@@ -526,6 +517,12 @@ function parseArgs(argv) {
     saveDir: null,
     minScore: null,
     format: 'structured',
+    location: null,
+    deep: false,
+    budget: null,
+    satisfaction: null,
+    notes: null,
+    brand: null,
     subcommand: null,
     subAction: null,
     subArgs: [],
@@ -540,8 +537,18 @@ function parseArgs(argv) {
       const arg = argv[i];
       if (arg === '--note' && argv[i + 1]) {
         opts.note = argv[++i];
+      } else if (arg === '--notes' && argv[i + 1]) {
+        opts.notes = argv[++i];
       } else if (arg === '--category' && argv[i + 1]) {
         opts.category = argv[++i];
+      } else if (arg === '--satisfaction' && argv[i + 1]) {
+        opts.satisfaction = parseInt(argv[++i], 10);
+      } else if (arg === '--brand' && argv[i + 1]) {
+        opts.brand = argv[++i];
+      } else if (arg === '--deep') {
+        opts.deep = true;
+      } else if (arg === '--budget' && argv[i + 1]) {
+        opts.budget = parseInt(argv[++i], 10);
       } else if (!arg.startsWith('--')) {
         opts.subArgs.push(arg);
       }
@@ -584,6 +591,11 @@ function parseArgs(argv) {
       opts.format = argv[++i];
     } else if (arg === '--raw') {
       opts.format = 'raw';
+    } else if (arg === '--format' && argv[i + 1] === 'json') {
+      opts.format = 'json';
+      i++;
+    } else if (arg === '--location' && argv[i + 1]) {
+      opts.location = argv[++i];
     } else if (arg === '--help' || arg === '-h') {
       // handled in main
     } else if (!arg.startsWith('--') && !opts.query) {
@@ -622,40 +634,12 @@ function validateCategory(category) {
   return `Error: invalid category "${category}". Use product|supplement|restaurant|service|software|tech.`;
 }
 
+// braveSearch, fetchText, extractRedditIds, parseCommentTree, fetchRedditThread
+// moved to lib/search.js and lib/reddit.js
+
 async function braveSearch(query, count = 5) {
-  if (!BRAVE_KEY) throw new Error('BRAVE_API_KEY not set');
-
-  await braveRateLimit();
-  trackBrave();
-
-  const url = `${BRAVE_API_URL}?q=${encodeURIComponent(query)}&count=${count}`;
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: {
-        'X-Subscription-Token': BRAVE_KEY,
-        'Accept': 'application/json'
-      }
-    });
-  } catch (err) {
-    log(`Brave fetch error: ${err.message}`);
-    return [];
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    log(`Brave API ${res.status}: ${body.slice(0, 200)}`);
-    return [];
-  }
-
-  const data = await res.json();
-  return (data.web?.results || []).map(result => ({
-    title: result.title || '',
-    url: result.url,
-    snippet: result.description || '',
-    source: safeHostname(result.url),
-    age: result.age || null
-  }));
+  const result = await search(query, count);
+  return result.results || [];
 }
 
 async function fetchText(url, headers = {}) {
@@ -682,98 +666,6 @@ async function fetchText(url, headers = {}) {
   } catch {
     return '';
   }
-}
-
-function extractRedditIds(url) {
-  const match = String(url || '').match(/reddit\.com\/r\/(\w+)\/comments\/(\w+)/);
-  return match ? { subreddit: match[1], postId: match[2] } : null;
-}
-
-function parseCommentTree(children, depth = 0) {
-  const out = [];
-  if (!Array.isArray(children)) return out;
-
-  for (const child of children) {
-    if (child.kind !== 't1') continue;
-    const data = child.data;
-    if (!data || !data.body || data.author === 'AutoModerator') continue;
-
-    out.push({
-      id: data.id || null,
-      body: truncate(cleanupText(data.body), MAX_COMMENT_LENGTH),
-      score: data.score ?? 0,
-      author: data.author || '[deleted]',
-      depth
-    });
-
-    if (data.replies?.data?.children) {
-      out.push(...parseCommentTree(data.replies.data.children, depth + 1));
-    }
-  }
-
-  return out;
-}
-
-async function fetchRedditThread(url) {
-  const ids = extractRedditIds(url);
-  if (!ids) return null;
-
-  await redditRateLimit();
-  trackReddit();
-
-  const jsonUrl = `https://www.reddit.com/r/${ids.subreddit}/comments/${ids.postId}/.json?limit=100&sort=top`;
-  let res;
-
-  try {
-    res = await fetch(jsonUrl, { headers: { 'User-Agent': REDDIT_UA } });
-  } catch (err) {
-    log(`Reddit fetch error: ${err.message}`);
-    return null;
-  }
-
-  if (res.status === 429) {
-    log('Reddit 429, retrying in 2s...');
-    await sleep(2000);
-    await redditRateLimit();
-    trackReddit();
-    try {
-      res = await fetch(jsonUrl, { headers: { 'User-Agent': REDDIT_UA } });
-    } catch {
-      return null;
-    }
-    if (!res.ok) {
-      log(`Reddit retry failed: ${res.status}`);
-      return null;
-    }
-  } else if (!res.ok) {
-    log(`Reddit ${res.status} for r/${ids.subreddit}/${ids.postId}`);
-    return null;
-  }
-
-  let data;
-  try {
-    data = await res.json();
-  } catch {
-    return null;
-  }
-
-  if (!Array.isArray(data) || data.length < 2) return null;
-  const post = data[0]?.data?.children?.[0]?.data;
-  if (!post) return null;
-
-  const comments = parseCommentTree(data[1]?.data?.children || []);
-  comments.sort((a, b) => b.score - a.score);
-
-  return {
-    url: `https://www.reddit.com/r/${ids.subreddit}/comments/${post.id}/`,
-    postId: post.id,
-    title: cleanupText(post.title || ''),
-    selftext: truncate(cleanupText(post.selftext || ''), 2000),
-    subreddit: ids.subreddit,
-    upvotes: post.ups || 0,
-    commentCount: comments.length,
-    comments
-  };
 }
 
 async function searchReddit(query, category = 'product', maxThreads = 3, minScore = null) {
@@ -1086,20 +978,48 @@ function extractCompareTermsFromQuery(query) {
   return [];
 }
 
+const LOCATION_DEPENDENT_CATEGORIES = new Set(['restaurant', 'service']);
+
+function resolveLocation(opts) {
+  if (opts.location) return opts.location;
+  const config = loadConfig();
+  if (config.defaultLocation) {
+    return typeof config.defaultLocation === 'string'
+      ? config.defaultLocation
+      : config.defaultLocation.city
+        ? `${config.defaultLocation.city}${config.defaultLocation.state ? ', ' + config.defaultLocation.state : ''}`
+        : null;
+  }
+  return null;
+}
+
+function locationScopedQuery(query, location) {
+  if (!location) return query;
+  return `${query} ${location}`;
+}
+
 async function collectRawData(query, opts) {
   const category = opts.category || detectCategory(query);
   const depth = opts.depth || 'standard';
   const minScore = opts.minScore ?? null;
   const raw = buildEmptyRawResult(query, category, depth);
 
+  // Geographic awareness
+  const location = LOCATION_DEPENDENT_CATEGORIES.has(category) ? resolveLocation(opts) : (opts.location || null);
+  if (LOCATION_DEPENDENT_CATEGORIES.has(category) && !location) {
+    log(`Warning: location-dependent category "${category}" without location — results may be generic`);
+  }
+  raw.location = location || null;
+
   const compareTerms = opts.compareExplicit?.length === 2
     ? opts.compareExplicit.map(cleanupText)
     : [];
   const compareMode = Boolean(opts.compare && compareTerms.length === 2);
-  const focusQuery = compareMode ? `${compareTerms[0]} vs ${compareTerms[1]}` : query;
+  const baseQuery = compareMode ? `${compareTerms[0]} vs ${compareTerms[1]}` : query;
+  const focusQuery = location ? locationScopedQuery(baseQuery, location) : baseQuery;
   const maxRedditThreads = depth === 'quick' ? 1 : 3;
 
-  log(`Query: "${query}" | category: ${category} | depth: ${depth}`);
+  log(`Query: "${query}" | category: ${category} | depth: ${depth}${location ? ` | location: ${location}` : ''}`);
 
   log('Searching Reddit...');
   try {
@@ -2196,16 +2116,21 @@ function analyzeRawResult(raw, brandIntel, opts) {
     ? buildRawComparison(raw, comparisonItems[0], comparisonItems[1], catalog)
     : null;
 
+  const calibrationNote = getCalibrationNote();
+
   const structured = {
-    schemaVersion: 3,
+    schema: 'consensus-research/v5',
+    schemaVersion: 5,
     query: raw.query,
     category: raw.category,
     depth: raw.depth,
     timestamp: raw.timestamp,
+    location: raw.location || null,
     dataSufficiency: raw.dataSufficiency.toLowerCase(),
     sourceCount: raw.sourceCount,
     sourceSummary: buildSourceSummary(raw),
     apiCost: toApiCostSummary(raw.apiCost),
+    calibrationNote: calibrationNote || null,
     priorIntel,
     claims,
     themes,
@@ -2553,8 +2478,80 @@ function saveResearch(result, saveDir) {
   return { mdPath, jsonPath };
 }
 
+function buildV5Json(structured, raw) {
+  const cost = structured.apiCost || {};
+  const topPick = structured.draftScore?.topPick || null;
+  const topScore = topPick && structured.draftScore?.brandScores?.[topPick]
+    ? structured.draftScore.brandScores[topPick]
+    : null;
+
+  const scoreInterpretation = score => {
+    if (score == null) return 'insufficient data';
+    if (score >= 8) return 'Strong Buy';
+    if (score >= 6.5) return 'Buy with Caveats';
+    if (score >= 4.5) return 'Mixed';
+    return 'Avoid';
+  };
+
+  return {
+    schema: 'consensus-research/v5',
+    meta: {
+      query: structured.query,
+      category: structured.category,
+      depth: structured.depth,
+      temporalScope: null,
+      location: structured.location || null,
+      researchDate: toDateOnly(structured.timestamp),
+      sourceDateRange: { oldest: null, newest: null },
+      searchProvider: cost.searchProvider || 'unknown',
+      searchCost: {
+        brave: cost.brave || 0,
+        ddg: cost.ddg || 0,
+        reddit: cost.reddit || 0,
+        estimatedUsd: cost.estimatedUSD || 0
+      }
+    },
+    verdict: {
+      score: topScore,
+      confidence: (structured.dataSufficiency || 'low').toLowerCase(),
+      interpretation: scoreInterpretation(topScore),
+      topPick,
+      runnerUp: structured.draftScore?.runnerUp || null,
+      calibrationNote: structured.calibrationNote || null
+    },
+    claims: (structured.themes || []).map(theme => ({
+      theme: theme.dimension,
+      brand: theme.brand || null,
+      sentiment: theme.polarity || 'mixed',
+      agreement: theme.frequency >= 3 ? 'confirmed' : theme.frequency >= 2 ? 'notable' : 'anecdotal',
+      sourceCount: theme.frequency,
+      sources: uniq(theme.sourceTypes || []),
+      quotes: (theme.claims || []).slice(0, 3).map(c => c.quote).filter(Boolean)
+    })),
+    brands: (structured.brandSignals || []).map(signal => ({
+      name: signal.brand,
+      score: structured.draftScore?.brandScores?.[signal.brand] || null,
+      strengths: signal.themes.filter(t => t.polarity === 'positive').map(t => t.dimension),
+      issues: signal.themes.filter(t => t.polarity === 'negative').map(t => t.dimension),
+      flags: signal.flags || []
+    })),
+    alternatives: (structured.brandSignals || []).slice(1).map(signal => ({
+      name: signal.brand,
+      mentionCount: signal.mentions,
+      reason: signal.themes[0] ? summarizeTheme(signal.themes[0]) : null
+    })),
+    patterns: null,
+    sourceBreakdown: Object.fromEntries(
+      Object.entries(structured.sourceSummary || {}).map(([k, v]) => [k, { count: v, signal: v > 2 ? 'HIGH' : v > 0 ? 'MEDIUM' : 'NONE' }])
+    ),
+    comparison: structured.comparison || null,
+    location: structured.location || null
+  };
+}
+
 function serializeResult(result, format) {
   if (format === 'raw') return result.raw;
+  if (format === 'json') return buildV5Json(result.structured, result.raw);
   if (format === 'both') {
     return {
       schemaVersion: SCHEMA_VERSION,
@@ -2636,28 +2633,27 @@ function watchlistList() {
   }
 }
 
-async function watchlistCheck() {
-  if (!BRAVE_KEY) {
-    console.error('Error: BRAVE_API_KEY required for watchlist check.');
-    process.exit(1);
-  }
-
+async function watchlistCheck(deep = false, budget = 3) {
   const watchlist = watchlistLoad();
   if (watchlist.items.length === 0) {
     console.log('Watchlist is empty.');
     return;
   }
 
-  console.log(`Watchlist Check (${watchlist.items.length} items)\n`);
-  for (let index = 0; index < watchlist.items.length; index++) {
-    const item = watchlist.items[index];
+  const itemsToCheck = deep ? watchlist.items.slice(0, budget) : watchlist.items;
+  const mode = deep ? 'Deep' : 'Quick';
+  console.log(`Watchlist ${mode} Check (${itemsToCheck.length}${deep ? `/${watchlist.items.length}` : ''} items)\n`);
+
+  for (let index = 0; index < itemsToCheck.length; index++) {
+    const item = itemsToCheck[index];
+    const itemIndex = watchlist.items.indexOf(item);
     resetApiCalls();
 
     try {
       const result = await runResearch(item.query, {
         category: item.category,
-        depth: 'quick',
-        noCache: false,
+        depth: deep ? 'standard' : 'quick',
+        noCache: deep,
         compare: false,
         minScore: null,
         format: 'structured'
@@ -2669,6 +2665,7 @@ async function watchlistCheck() {
 
       let status = 'no change';
       let icon = '[ok]';
+      let recommendation = null;
 
       if (!item.lastChecked) {
         status = `first check (${newScore})`;
@@ -2685,11 +2682,68 @@ async function watchlistCheck() {
         }
       }
 
-      console.log(`${icon} ${item.query} - ${status} (${newScore}, ${newSourceCount.reddit} Reddit threads)`);
+      // Deep check: compare themes to original
+      if (deep && item.themes && item.themes.length > 0 && result.structured) {
+        const newThemes = (result.structured.themes || [])
+          .filter(t => t.frequency >= 2)
+          .map(t => ({
+            dimension: t.dimension,
+            polarity: t.polarity,
+            frequency: t.frequency,
+            brand: t.brand
+          }));
 
-      watchlist.items[index].lastChecked = new Date().toISOString();
-      watchlist.items[index].lastScore = newScore;
-      watchlist.items[index].lastSourceCount = newSourceCount;
+        const oldThemeSet = new Set(item.themes.map(t => typeof t === 'string' ? t : t.dimension || t));
+        const newIssues = newThemes.filter(t => t.polarity === 'negative' && !oldThemeSet.has(t.dimension));
+        const newStrengths = newThemes.filter(t => t.polarity === 'positive' && !oldThemeSet.has(t.dimension));
+
+        // Check for reformulation keywords
+        const allCommentText = (result.raw?.reddit?.threads || [])
+          .flatMap(t => t.comments.map(c => c.body))
+          .join(' ')
+          .toLowerCase();
+        const reformulationKeywords = ['new formula', 'they changed', 'not the same', 'reformulat', 'different now'];
+        const reformulationDetected = reformulationKeywords.some(kw => allCommentText.includes(kw));
+
+        if (reformulationDetected) {
+          icon = '[!!!]';
+          status += ' | REFORMULATION detected in new sources';
+          recommendation = 'Re-research urgently (possible product change)';
+        }
+
+        if (newIssues.length > 0) {
+          icon = icon === '[ok]' ? '[warn]' : icon;
+          status += ` | NEW ISSUES: ${newIssues.map(t => t.dimension).join(', ')}`;
+          recommendation = recommendation || 'Re-research (new complaint patterns found)';
+        }
+
+        if (newStrengths.length > 0 && icon === '[ok]') {
+          status += ` | new positive signals: ${newStrengths.map(t => t.dimension).join(', ')}`;
+        }
+
+        // Score shift detection
+        const oldBrandScore = item.lastBrandScore;
+        const newBrandScore = result.structured.draftScore?.brandScores
+          ? Math.max(...Object.values(result.structured.draftScore.brandScores))
+          : null;
+        if (oldBrandScore != null && newBrandScore != null && Math.abs(newBrandScore - oldBrandScore) >= 0.5) {
+          icon = icon === '[ok]' ? '[shift]' : icon;
+          status += ` | SCORE SHIFT: ${oldBrandScore} -> ${newBrandScore}`;
+          recommendation = recommendation || `Score shifted by ${round(newBrandScore - oldBrandScore)} points`;
+        }
+
+        // Save new themes
+        watchlist.items[itemIndex].themes = newThemes.map(t => t.dimension);
+        watchlist.items[itemIndex].lastBrandScore = newBrandScore;
+      }
+
+      console.log(`${icon} ${item.query} - ${status} (${newScore}, ${newSourceCount.reddit} Reddit threads)`);
+      if (recommendation) console.log(`     RECOMMENDATION: ${recommendation}`);
+
+      watchlist.items[itemIndex].lastChecked = new Date().toISOString();
+      watchlist.items[itemIndex].lastScore = newScore;
+      watchlist.items[itemIndex].lastSourceCount = newSourceCount;
+      if (deep) watchlist.items[itemIndex].lastDeepCheck = new Date().toISOString();
     } catch (err) {
       console.log(`[err] ${item.query} - error: ${err.message}`);
     }
@@ -2809,6 +2863,8 @@ const HELP = `Usage: research.js <query> [options]
        research.js --compare "Item A" "Item B" [options]
        research.js cache <clear|prune>
        research.js watchlist [add|remove|check] [query] [--note "..."]
+       research.js feedback <product> --satisfaction <1-10> [--notes "..."] [--brand "..."]
+       research.js status
 
 Options:
   --category <type>     product|supplement|restaurant|service|software|tech
@@ -2817,11 +2873,13 @@ Options:
   --output <path>       Write JSON results to file (default: stdout)
   --compare [A B]       Compare brands or products. No args = auto-detect top 2.
   --freshness <dir>     Check research files for staleness (separate mode)
-  --format <type>       structured|raw|both (default: structured)
+  --format <type>       structured|raw|both|json (default: structured)
+                        json = canonical v5 JSON schema for machine consumption
   --no-cache            Skip cache, force fresh API calls
   --save [dir]          Save markdown report + structured JSON to directory
                         Default: ./memory/research/
   --min-score <N>       Filter Reddit comments below N upvotes
+  --location <place>    Scope results to a location (auto-used for restaurants/services)
   --help, -h            Show this help
 
 Subcommands:
@@ -2831,6 +2889,13 @@ Subcommands:
   watchlist add <q>     Add query to watchlist (--note "..." --category X)
   watchlist remove <q>  Remove query from watchlist
   watchlist check       Quick-research all watchlist items, report changes
+  watchlist check --deep  Deep check: compare themes, detect reformulations (budget: 3 items)
+  watchlist check --deep --budget N  Deep check with custom item budget
+  feedback <product>    Record satisfaction feedback for a researched product
+    --satisfaction <1-10>  Your satisfaction score
+    --notes "..."          Optional notes about your experience
+    --brand "..."          Brand you purchased (auto-detected from research if omitted)
+  status                Show system health, calibration data, search provider status
 
 Depth modes:
   quick       2-3 searches, limited sources, structured output only
@@ -2838,16 +2903,20 @@ Depth modes:
   deep        Standard + YouTube + Twitter/X complaints
 
 Environment:
-  BRAVE_API_KEY         Required for research. Get one free at https://brave.com/search/api/
+  BRAVE_API_KEY         Recommended for research. Falls back to DuckDuckGo if unavailable.
+  SERPAPI_KEY            Optional SerpAPI key (future use)
 
 Examples:
   research.js "glycine powder" --category supplement --save
   research.js "cursor vs zed" --category software
   research.js --compare "Sony WH-1000XM5" "Bose QC Ultra" --category tech --save
-  research.js "protein powder" --format raw
+  research.js "protein powder" --format json
+  research.js "best ramen" --location "Los Angeles"
   research.js cache prune
   research.js watchlist add "Nutricost glycine" --note "daily supplement"
-  research.js watchlist check
+  research.js watchlist check --deep
+  research.js feedback "creatine monohydrate" --satisfaction 8 --notes "dissolved well"
+  research.js status
   research.js --freshness ./memory/research/`;
 
 async function main() {
@@ -2902,11 +2971,76 @@ async function main() {
       return;
     }
     if (args.subAction === 'check') {
-      await watchlistCheck();
+      await watchlistCheck(args.deep, args.budget || 3);
       return;
     }
     console.error('Usage: research.js watchlist [add|remove|check]');
     process.exit(1);
+  }
+
+  if (args.subcommand === 'feedback') {
+    const product = args.subArgs[0] || args.subAction;
+    if (!product) {
+      console.error('Usage: research.js feedback <product> --satisfaction <1-10> [--notes "..."] [--brand "..."]');
+      process.exit(1);
+    }
+    if (!args.satisfaction || args.satisfaction < 1 || args.satisfaction > 10) {
+      console.error('Error: --satisfaction <1-10> required.');
+      process.exit(1);
+    }
+    try {
+      const entry = addFeedback(product, args.satisfaction, {
+        notes: args.notes || args.note || null,
+        brand: args.brand || null
+      });
+      console.log(`Feedback recorded: ${product} = ${entry.satisfaction}/10`);
+      if (entry.deltaFromPrediction != null) {
+        const dir = entry.deltaFromPrediction > 0 ? '+' : '';
+        console.log(`  Delta from prediction: ${dir}${entry.deltaFromPrediction} (research predicted ${entry.researchScore})`);
+      }
+      console.log(`  After purchase, this data improves future scoring accuracy.`);
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (args.subcommand === 'status') {
+    console.log('=== Consensus Research Status ===\n');
+    console.log(`Schema version: ${SCHEMA_VERSION}`);
+    console.log(`Search: ${getSearchHealth()}`);
+    console.log(`${getRedditHealthSummary()}`);
+    console.log('');
+    console.log(getFeedbackSummary());
+    console.log('');
+
+    // Watchlist summary
+    const watchlist = watchlistLoad();
+    console.log(`Watchlist: ${watchlist.items.length} items`);
+    if (watchlist.items.length > 0) {
+      const unchecked = watchlist.items.filter(i => !i.lastChecked).length;
+      if (unchecked > 0) console.log(`  ${unchecked} never checked`);
+    }
+    console.log('');
+
+    // Cache summary
+    if (existsSync(CACHE_DIR)) {
+      const cacheFiles = readdirSync(CACHE_DIR).filter(f => f.endsWith('.json')).length;
+      console.log(`Cache: ${cacheFiles} entries`);
+    } else {
+      console.log('Cache: empty');
+    }
+
+    // Config
+    const config = loadConfig();
+    if (config.defaultLocation) {
+      const loc = typeof config.defaultLocation === 'string'
+        ? config.defaultLocation
+        : `${config.defaultLocation.city || '?'}, ${config.defaultLocation.state || '?'}`;
+      console.log(`Default location: ${loc}`);
+    }
+    return;
   }
 
   if (args.freshness) {
@@ -2919,8 +3053,8 @@ async function main() {
     process.exit(1);
   }
 
-  if (!['structured', 'raw', 'both'].includes(args.format)) {
-    console.error(`Error: invalid format "${args.format}". Use structured|raw|both.`);
+  if (!['structured', 'raw', 'both', 'json'].includes(args.format)) {
+    console.error(`Error: invalid format "${args.format}". Use structured|raw|both|json.`);
     process.exit(1);
   }
 
@@ -2941,10 +3075,8 @@ async function main() {
     process.exit(0);
   }
 
-  if (!BRAVE_KEY) {
-    console.error('Error: BRAVE_API_KEY environment variable required.');
-    console.error('Get a free key at: https://brave.com/search/api/');
-    process.exit(1);
+  if (!process.env.BRAVE_API_KEY) {
+    log('Warning: BRAVE_API_KEY not set — using DuckDuckGo fallback (lower quality results)');
   }
 
   try {
@@ -2983,14 +3115,17 @@ if (require.main === module) {
     analyzeRawResult,
     buildEntityCatalog,
     buildStructuredComparison,
+    buildV5Json,
     cacheKey,
     computeDraftScore,
     extractClaims,
     generateBrandIntelMd,
     groupThemes,
     loadBrandIntel,
+    loadConfig,
     parseLegacyBrandIntelMarkdown,
     runResearch,
+    saveConfig,
     serializeResult,
     updateBrandIntel,
     validateCategory

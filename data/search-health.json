@@ -1,0 +1,15 @@
+{
+  "providers": {
+    "brave": {
+      "status": "unknown",
+      "failures": [],
+      "lastSuccess": null
+    },
+    "ddg": {
+      "status": "healthy",
+      "failures": [],
+      "lastSuccess": "2026-03-25T20:54:24.098Z"
+    }
+  },
+  "lastUpdated": "2026-03-25T20:54:24.098Z"
+}

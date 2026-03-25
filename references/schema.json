@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Consensus Research Result v5",
+  "description": "Canonical JSON output schema for consensus-research skill",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "consensus-research/v5"
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "category": { "type": "string", "enum": ["product", "supplement", "restaurant", "service", "software", "tech"] },
+        "depth": { "type": "string", "enum": ["quick", "standard", "deep"] },
+        "temporalScope": { "type": ["string", "null"] },
+        "location": { "type": ["string", "null"] },
+        "researchDate": { "type": "string", "format": "date" },
+        "sourceDateRange": {
+          "type": "object",
+          "properties": {
+            "oldest": { "type": ["string", "null"] },
+            "newest": { "type": ["string", "null"] }
+          }
+        },
+        "durationMs": { "type": "number" },
+        "searchProvider": { "type": "string" },
+        "searchCost": {
+          "type": "object",
+          "properties": {
+            "brave": { "type": "number" },
+            "ddg": { "type": "number" },
+            "reddit": { "type": "number" },
+            "estimatedUsd": { "type": "number" }
+          }
+        }
+      },
+      "required": ["query", "category", "depth", "researchDate"]
+    },
+    "verdict": {
+      "type": "object",
+      "properties": {
+        "score": { "type": ["number", "null"] },
+        "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+        "interpretation": { "type": "string" },
+        "topPick": { "type": ["string", "null"] },
+        "runnerUp": {
+          "type": ["object", "null"],
+          "properties": {
+            "brand": { "type": "string" },
+            "reason": { "type": "string" }
+          }
+        },
+        "calibrationNote": { "type": ["string", "null"] }
+      },
+      "required": ["confidence"]
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "theme": { "type": "string" },
+          "sentiment": { "type": "string", "enum": ["positive", "negative", "mixed"] },
+          "agreement": { "type": "string", "enum": ["confirmed", "notable", "anecdotal"] },
+          "sourceCount": { "type": "number" },
+          "sources": { "type": "array", "items": { "type": "string" } },
+          "scoreImpact": { "type": "number" },
+          "quotes": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "brands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "score": { "type": ["number", "null"] },
+          "pricePerServing": { "type": ["number", "null"] },
+          "strengths": { "type": "array", "items": { "type": "string" } },
+          "issues": { "type": "array", "items": { "type": "string" } },
+          "recommendation": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "alternatives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "mentionCount": { "type": "number" },
+          "reason": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "patterns": {
+      "type": ["object", "null"],
+      "properties": {
+        "topPatterns": { "type": "array", "items": { "type": "string" } },
+        "powerUserTips": { "type": "array", "items": { "type": "string" } },
+        "commonConfigs": { "type": "array", "items": { "type": "string" } },
+        "antiPatterns": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "sourceBreakdown": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "count": { "type": "number" },
+          "signal": { "type": "string" }
+        }
+      }
+    },
+    "comparison": {
+      "type": ["object", "null"]
+    },
+    "location": {
+      "type": ["string", "null"]
+    }
+  },
+  "required": ["schema", "meta", "verdict"]
+}

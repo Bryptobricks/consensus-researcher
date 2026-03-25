@@ -205,6 +205,10 @@ After delivering results, save a summary to `memory/research/[product-name].md` 
 - Query, date, verdict, score, key findings, sources consulted
 - This builds a personal review database over time
 
+After delivery, prompt: *"After purchase, run `feedback '[product]' --satisfaction [1-10]` to improve future accuracy."*
+
+If calibration data exists, include in output: *"Calibration: based on N past purchases, scores tend to be [optimistic/pessimistic/accurate] by X points."*
+
 ## Research Depth Modes
 
 - **Quick** — 2-3 searches, Reddit + one expert source, compact output only. Use for: simple Amazon purchases under $50, commodity products, "which brand of X should I get?"
@@ -260,3 +264,57 @@ Each agent should return structured data:
 ```
 
 The synthesizer applies convergence scoring from `references/methodology.md` and generates the final output template. This mode is optional — single-agent sequential research is the default.
+
+---
+
+## v5 Features
+
+### Search Provider Fallback
+The CLI no longer requires `BRAVE_API_KEY`. If Brave is unavailable (quota exceeded, key missing, rate limited), it automatically falls back to DuckDuckGo HTML search. Lower quality results but always available. Check provider status with `research.js status`.
+
+### Reddit Resilience Layer
+Reddit fetching now uses a 3-strategy cascade:
+1. JSON endpoint (best quality, full comment scores)
+2. Old Reddit HTML parsing (simpler DOM, works when JSON is blocked)
+3. Generic web fetch (last resort, extracts what it can)
+
+Successful fetches are cached in `data/reddit-cache/` for 7 days. Health is tracked in `data/reddit-health.json`.
+
+### Scoring Calibration & Feedback Loop
+After purchasing a researched product, record satisfaction:
+```bash
+node scripts/research.js feedback "creatine monohydrate" --satisfaction 8 --notes "dissolved well"
+```
+After 5+ entries, calibration kicks in — surfaces whether scores tend to be optimistic, pessimistic, or accurate. Future research output includes a calibration note when available.
+
+### Smart Watchlist (Deep Check)
+```bash
+node scripts/research.js watchlist check --deep         # Deep check top 3 items
+node scripts/research.js watchlist check --deep --budget 5  # Deep check top 5
+```
+Deep checks run standard-depth research (not quick) and compare new themes against the original:
+- Detects **NEW ISSUES** (complaint patterns that didn't exist before)
+- Detects **REFORMULATIONS** (keywords like "new formula," "they changed")
+- Detects **SCORE SHIFTS** (when enough new data moves the score by 0.5+ points)
+- Budget-capped to avoid blowing API quotas (default: 3 items per run)
+
+### Geographic Awareness
+Location-dependent categories (restaurants, services) auto-detect and prompt for location. Set a default:
+```json
+// data/config.json
+{ "defaultLocation": { "city": "Los Angeles", "state": "CA", "subreddits": ["r/LosAngeles", "r/FoodLosAngeles"] } }
+```
+Or use `--location "West Hollywood, CA"` per-query. Location is appended to all search queries and shown in output.
+
+### Structured JSON Output (v5 Schema)
+```bash
+node scripts/research.js "creatine" --format json    # Canonical v5 JSON
+node scripts/research.js "creatine" --format both     # JSON + raw
+```
+The v5 JSON schema (`references/schema.json`) provides a clean machine-readable format with `meta`, `verdict`, `claims`, `brands`, `alternatives`, and `sourceBreakdown` sections. Use `--format json` for dashboards and cross-skill consumption.
+
+### System Status
+```bash
+node scripts/research.js status
+```
+Shows: schema version, search provider health, Reddit health, calibration data, watchlist summary, cache size, and default location.
