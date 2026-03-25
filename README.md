@@ -25,6 +25,13 @@ Instead of trusting any single source, this skill aggregates reviews from Reddit
 - **Data Sufficiency Gate** — Won't produce a confident score on thin data. LOW confidence = honest caveats.
 - **Research Freshness Tracking** — Category-specific decay (restaurants: 6mo, supplements: 2yr, durable goods: 3yr). Temporal scoring weights recent sources higher.
 - **Head-to-Head Comparison** — Simple differentiators between top 2 candidates: shared/unique strengths, issues, price winner.
+- **Search Provider Fallback** — Brave → DuckDuckGo automatic failover. Works with zero API keys configured.
+- **Reddit Resilience** — 3-strategy cascade (JSON endpoint → old.reddit HTML parse → web_fetch) with 7-day content cache. Reddit going down no longer kills research.
+- **Scoring Calibration** — Tracks your actual satisfaction vs predicted scores. After 5+ data points, detects bias and adjusts future confidence notes.
+- **Smart Watchlist (Deep Mode)** — `--deep` re-reads new content, compares themes to original research, flags reformulations and score shifts.
+- **Geographic Awareness** — Auto-detects location-dependent queries (restaurants, services). `--location` flag or default in config.
+- **Structured JSON Output** — `--format json` for machine-readable results. Canonical v5 schema for downstream tool consumption.
+- **System Health Dashboard** — `research.js status` shows provider health, Reddit resilience state, calibration accuracy, watchlist summary.
 - **File-Based Cache** — MD5-keyed query cache (30min TTL, 2hr for quick mode). No wasted API calls on repeat queries.
 - **Auto-Save** — `--save` flag writes a readable markdown report + raw JSON to `memory/research/` with auto-generated filenames.
 - **Cost Tracking** — Counts every Brave Search and Reddit API call per run. Shows estimated cost in output and stderr.
@@ -56,37 +63,46 @@ Then ask your agent to research something — it'll detect the skill automatical
 The `scripts/research.js` CLI automates data collection:
 
 ```bash
-# Standard supplement research
-BRAVE_API_KEY=your_key node scripts/research.js "glycine powder" --category supplement
+# Standard supplement research (works with or without BRAVE_API_KEY)
+node scripts/research.js "glycine powder" --category supplement
 
 # Recent-only research (last 30 days)
-BRAVE_API_KEY=your_key node scripts/research.js "cursor IDE" --since 30d
+node scripts/research.js "cursor IDE" --since 30d
 
 # Deep research with head-to-head comparison
-BRAVE_API_KEY=your_key node scripts/research.js "lion's mane" --depth deep --compare "Nootropics Depot" "Real Mushrooms"
+node scripts/research.js "lion's mane" --depth deep --compare "Nootropics Depot" "Real Mushrooms"
 
 # Quick product check
-BRAVE_API_KEY=your_key node scripts/research.js "USB-C hub" --depth quick
+node scripts/research.js "USB-C hub" --depth quick
+
+# Location-aware research
+node scripts/research.js "best ramen" --location "Los Angeles"
+
+# JSON output for downstream tools
+node scripts/research.js "creatine" --format json
 
 # Auto-save results as markdown + JSON
-BRAVE_API_KEY=your_key node scripts/research.js "creatine monohydrate" --save
+node scripts/research.js "creatine monohydrate" --save
 
 # Filter out low-quality Reddit comments
-BRAVE_API_KEY=your_key node scripts/research.js "protein powder" --min-score 5
+node scripts/research.js "protein powder" --min-score 5
 
-# Check research freshness
-node scripts/research.js freshness ./memory/research/
+# Post-purchase feedback (improves future accuracy)
+node scripts/research.js feedback "creatine monohydrate" --satisfaction 8 --notes "great results"
 
-# Product watchlist
+# Smart watchlist with deep theme comparison
 node scripts/research.js watchlist add "Nutricost creatine" --note "daily supplement"
-node scripts/research.js watchlist check    # re-research all, detect changes
-node scripts/research.js watchlist          # show tracked products
+node scripts/research.js watchlist check --deep    # re-research, detect theme shifts
+node scripts/research.js watchlist check           # shallow count check
+
+# System health
+node scripts/research.js status    # provider health, calibration, watchlist summary
 
 # Cache management
-node scripts/research.js cache clear        # clear all cached results
+node scripts/research.js cache clear
 ```
 
-**Requirements:** Node.js 18+, Brave Search API key ([free tier: 2K queries/mo](https://brave.com/search/api/))
+**Requirements:** Node.js 18+. Brave Search API key optional ([free tier: 2K queries/mo](https://brave.com/search/api/)) — DuckDuckGo fallback always available.
 
 ## File Structure
 
@@ -94,16 +110,27 @@ node scripts/research.js cache clear        # clear all cached results
 consensus-research/
 ├── SKILL.md                      # Full skill spec (OpenClaw reads this)
 ├── scripts/
-│   └── research.js               # CLI data collection runner (1,347 lines, zero deps)
+│   ├── research.js               # CLI runner — research, feedback, watchlist, status
+│   └── lib/
+│       ├── search.js             # Search provider abstraction (Brave → DDG fallback)
+│       ├── reddit.js             # Reddit resilience layer (3-strategy + cache)
+│       └── feedback.js           # Scoring calibration & feedback loop
 ├── data/
 │   ├── cache/                    # MD5-keyed query cache (auto-managed)
-│   └── watchlist.json            # Product watchlist (created on first add)
+│   ├── reddit-cache/             # Reddit thread cache (7-day TTL)
+│   ├── config.json               # Default location + settings
+│   ├── feedback.json             # Calibration data (auto-created on first feedback)
+│   ├── search-health.json        # Search provider health tracking
+│   └── watchlist.json            # Product watchlist with theme tracking
 ├── memory/
-│   └── research/                 # Auto-saved research reports (--save)
-└── references/
-    ├── methodology.md            # Scoring framework, source weights, decay rates
-    ├── brand-intel.json          # Persistent brand reputation data (machine-readable)
-    └── brand-intel.md            # Persistent brand reputation database (human-readable)
+│   └── research/                 # Auto-saved research reports (.md + .json)
+├── references/
+│   ├── methodology.md            # Scoring framework, source weights, decay rates
+│   ├── schema.json               # Canonical v5 JSON output schema
+│   ├── brand-intel.json          # Persistent brand reputation data (machine-readable)
+│   └── brand-intel.md            # Persistent brand reputation database (human-readable)
+└── specs/
+    └── v5-improvements.md        # v5 improvement spec (reference)
 ```
 
 ## Source Hierarchy
@@ -128,12 +155,21 @@ Baseline **5.0** (neutral). Each confirmed strength across 3+ sources: **+0.5**.
 | 4.5–6.4 | Mixed |
 | < 4.5 | Avoid |
 
-## What's New (v4)
+## What's New (v5)
 
-- **Temporal Scoping** — explicit `--recent`/`--since` flags + auto-scope by category
-- **Twitter/X Dual Signal** — positive signal pass alongside complaint pass
-- **Pattern Extraction** — extracts usage workflows, power-user techniques, common configs, anti-patterns for software/tools
-- **Temporal Scoring** — sources weighted by age relative to category half-life
+- **Search Provider Fallback** — Brave → DuckDuckGo auto-fallback. BRAVE_API_KEY no longer required. DDG always available as backup.
+- **Reddit Resilience Layer** — 3-strategy fetch cascade (JSON → old.reddit HTML → web_fetch) + 7-day content cache + health tracking. No more single point of failure.
+- **Scoring Calibration** — `feedback` command tracks predicted score vs actual satisfaction. After 5+ entries, detects systematic bias and surfaces calibration notes on future research.
+- **Smart Watchlist** — `watchlist check --deep` reads new content since last research, compares themes, detects reformulations, flags score shifts. Budget-capped per check.
+- **Geographic Awareness** — `--location` flag for location-dependent queries. Auto-detects restaurants/services. Default location in `data/config.json`.
+- **JSON Schema v5** — `--format json` outputs canonical structured data. Machine-readable research results for downstream tools.
+- **System Health** — `research.js status` shows search provider health, Reddit health, calibration state, and watchlist summary.
+
+### v4 (previous)
+- Temporal Scoping (`--recent`/`--since` flags + auto-scope by category)
+- Twitter/X Dual Signal (positive + complaint pass)
+- Pattern Extraction (usage workflows, power-user techniques, anti-patterns)
+- Temporal Scoring (sources weighted by age relative to category half-life)
 
 ## Examples
 
