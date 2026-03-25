@@ -1,11 +1,30 @@
 ---
 name: consensus-research
-description: Multi-source product, service, and restaurant research using weighted consensus scoring and structured claims output. Use when researching any purchase decision, comparing products/brands, evaluating services/providers, finding restaurants, or when the user asks for reviews, recommendations, or "is X worth it?" questions. Aggregates Reddit, Amazon, HackerNews, expert reviews, GitHub repo signals for software/tech, Twitter complaints, and niche forums — weights by platform reliability and cross-platform convergence. NOT for: quick price checks, simple spec lookups, or questions answerable from a single source.
+description: Multi-source product, service, and restaurant research using weighted consensus scoring and structured claims output. MANDATORY for ANY purchase decision, product comparison, brand evaluation, service review, restaurant recommendation, or "is X worth it?" question. Also triggered by "research X", "find the best X", "compare X vs Y", "reviews of X", "should I buy X". Aggregates Reddit, Amazon, HackerNews, expert reviews, GitHub repo signals for software/tech, Twitter/X (dual-pass), YouTube, and niche forums — weights by platform reliability and cross-platform convergence. NOT for: quick price checks, simple spec lookups, or questions answerable from a single source.
 ---
 
 # Consensus Research Skill
 
 Multi-source research engine that finds truth at the intersection of independent review platforms. Core principle: **convergence across independent sources is the strongest signal.**
+
+## MANDATORY USE RULE — NON-NEGOTIABLE
+
+**This skill MUST be loaded and followed for ANY of these triggers:**
+- Purchase decisions of any kind (products, services, subscriptions)
+- "Best X", "which X should I get", "X vs Y", "is X worth it"
+- Product/brand/service reviews or comparisons
+- Restaurant or local business recommendations
+- Health product, supplement, or protocol research
+- Software/tool evaluation
+- Any query where the user is deciding between options
+
+**You may NOT:**
+- Skip this skill and give an opinion from training data alone
+- Partially follow the methodology (e.g., check Reddit but skip X or skip convergence scoring)
+- Deliver research results without the verification stamp (see Phase 6)
+- Claim you "don't have access" to sources — use fallback chains (DDG, Reddit cache, etc.)
+
+**If ANY step is skipped, the verification stamp MUST reflect it as ⚠️ or ❌.** There is no way to produce a ✅ Verified stamp without actually completing the methodology.
 
 ## When Triggered
 
@@ -144,6 +163,8 @@ If LOW confidence: explicitly caveat the score, recommend the user do additional
 💀 Dealbreakers: [none / detail]
 
 Full report saved → memory/research/[slug].md
+
+[VERIFICATION STAMP — mandatory, always last line]
 ```
 
 #### Full Format (for files):
@@ -197,6 +218,8 @@ Use this exact template:
 • Customer service: [pattern if found]
 
 📅 Review Freshness: [oldest/newest reviews considered, temporal relevance]
+
+[VERIFICATION STAMP — mandatory, always last line]
 ```
 
 ### Phase 5: Save to History
@@ -204,6 +227,56 @@ Use this exact template:
 After delivering results, save a summary to `memory/research/[product-name].md` with:
 - Query, date, verdict, score, key findings, sources consulted
 - This builds a personal review database over time
+
+### Phase 6: Verification Stamp — MANDATORY, CANNOT BE SKIPPED
+
+**Every single research output MUST end with a verification stamp.** No exceptions. No "I forgot." No "it wasn't needed for this one." If there is no stamp, the research is invalid.
+
+The stamp is ONE line at the very bottom of the output. It is computed from what actually happened during the research, not self-reported.
+
+**Tracking (internal):** As you execute Phases 1-4, maintain a checklist:
+```
+_sources_used: [list of source types actually queried]
+_reddit_deep_read: true/false (did you fetch full comment trees?)
+_x_dual_pass: true/false (did you run BOTH complaint AND positive searches?)
+_convergence_applied: true/false (did 3+ sources agree on at least 1 theme?)
+_temporal_scope_applied: true/false
+_brand_intel_checked: true/false
+_pattern_extraction: true/false/NA (only for applicable categories)
+_search_provider: brave/ddg/mixed
+_reddit_source: live/cached/fallback
+_total_sources: number
+```
+
+**Stamp logic:**
+
+✅ **Verified** — ALL of these must be true:
+- 3+ distinct source types queried (Reddit, Amazon, X, expert, YouTube count as separate types)
+- Reddit deep read completed (live or cached)
+- X dual-pass completed (both searches)
+- Convergence scoring applied (at least 1 confirmed theme at 3+ sources)
+- Brand intel checked
+- Temporal scope applied (for categories that require it)
+
+Format: `✅ Verified — [N] sources, [N]+ convergence, [CONFIDENCE] confidence | v5`
+
+⚠️ **Partial** — Research ran but one or more of these degraded:
+- A required source type was unavailable (Reddit blocked, X search failed)
+- Using cached/fallback data instead of live
+- Fewer than 3 source types
+- Convergence scoring ran but no themes hit 3+ agreement
+
+Format: `⚠️ Partial — [N] sources, [degradation reason] | v5`
+
+❌ **Incomplete** — Below minimum threshold:
+- Fewer than 2 source types
+- No Reddit data at all
+- No convergence scoring possible
+- Skipped required methodology steps
+
+Format: `❌ Incomplete — [N] sources, [what's missing] | v5`
+
+**The stamp is the LAST thing in the output.** After the compact format, after the full format, after everything. It is the final line. Always.
 
 After delivery, prompt: *"After purchase, run `feedback '[product]' --satisfaction [1-10]` to improve future accuracy."*
 
