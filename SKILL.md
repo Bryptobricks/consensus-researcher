@@ -21,11 +21,24 @@ Before starting new research:
 3. Surface findings proactively — e.g., *"Note: previous research flagged Nutricost's COA transparency issues"* or *"Brand intel shows NOW Foods FLAGGED for glycine specifically"*
 4. If prior research exists and is within the temporal decay window, offer to update rather than start fresh
 
+## Temporal Scoping
+
+Before executing the research loop, determine the **temporal scope** based on category and query:
+
+- **`--recent` or `--since <period>`** — Explicit override. Scopes ALL searches to the specified window (e.g., `--since 30d`, `--since 6m`). Appends date filters to every search query.
+- **Auto-scope by category:**
+  - Software/Apps, AI tools, crypto protocols: default to **last 6 months** (things change fast, old reviews are misleading)
+  - Restaurants, health services: default to **last 12 months**
+  - Supplements, durable goods: **no auto-scope** (long half-life, older data still valid)
+- **How to apply:** Use `web_search` `freshness` parameter (`"month"`, `"year"`) or append `after:YYYY-MM-DD` to search queries. For Reddit, scope with `site:reddit.com "[product]" 2026` or sort by new.
+- **Temporal scoring bonus:** Sources from within the auto-scope window get full weight. Sources older than the half-life for the category get half weight. Sources older than 2x half-life are noted but not scored.
+- **Always report the date range** of sources used in the output: "Sources: 8 results from Jan-Mar 2026, 3 from 2025 (half-weighted)."
+
 ## Core Research Loop
 
 ### Phase 1: Parallel Source Collection
 
-Fire site-scoped web searches simultaneously. Use `web_search` with site-scoping for each relevant platform:
+Fire site-scoped web searches simultaneously. Use `web_search` with site-scoping for each relevant platform. Apply temporal scope determined above.
 
 ```
 "[product/service name] review site:reddit.com"
@@ -43,7 +56,11 @@ curl -s -H "User-Agent: ConsensusResearch/1.0" "https://www.reddit.com/r/{subred
 ```
 This returns FULL comment bodies with scores, unlike web_fetch which only gets the OP text. Parse comment bodies and scores to extract real user experiences. This is where 60%+ of the signal lives — never skip this step for Reddit sources.
 
-For **Twitter/X complaints** (if API available): search `"[product/service name]" (broken OR terrible OR worst OR disappointed OR refund)` to surface failure patterns.
+**Twitter/X — Dual Signal Pass (REQUIRED):** Use `node tools/twitter/twitter.js search` (CLI first, API fallback). Run TWO searches:
+1. **Complaint signal:** `"[product/service name]" (broken OR terrible OR worst OR disappointed OR refund)` — surfaces failure patterns
+2. **Positive signal:** `"[product/service name]" (love OR best OR switched to OR game changer OR underrated OR amazing)` — surfaces what's actually working and why people choose it
+
+Extract from both: specific experiences, usage patterns, comparisons, workflows. X is uniquely good for real-time sentiment and catching product changes (reformulations, updates, regressions) that haven't hit Reddit/Amazon yet. Weight: MEDIUM (same as Amazon verified). Apply temporal scope — recent X posts are more valuable than old ones.
 
 **YouTube Transcript Extraction:** For video reviews (teardowns, long-term follow-ups, expert analysis), extract transcripts using:
 ```python
@@ -66,6 +83,22 @@ The script now normalizes evidence into a `claims[]` layer before grouping or sc
 - **Comparison mentions** — "switched from X" or "wish I got Y instead"
 - **Competitor auto-discovery** — actively identify all competitor/alternative products mentioned in reviews. Look for patterns: "switched from X to Y", "I tried A, B, and C", "wish I got Y instead", "X is better than Y", "used to use Z". Build the competitor list dynamically from the reviews themselves — don't rely on pre-knowing competitors.
 - **Use-case segments** — who loves it vs who hates it and why
+- **Usage patterns** (CRITICAL for software/tools/protocols/services) — extract HOW people actually use it, not just whether they like it. Look for: specific workflows, configurations, settings, tips, workarounds, "here's what I do," "the trick is to," common setups, integration patterns, power-user techniques. This layer answers "what are the best practitioners actually doing?" rather than "is this good?"
+
+### Pattern Extraction Mode
+
+For categories where **how people use it** matters more than **whether they like it** (software, tools, protocols, services with configurable workflows, AI tools, trading platforms), automatically activate pattern extraction alongside standard opinion aggregation.
+
+**When to activate:** Auto-detect based on category. Always active for: Software/Apps, Tech/Electronics, AI tools, crypto protocols/platforms, any query containing "how to," "best way to," "setup," "workflow," "configure."
+
+**What to extract:**
+- **Top usage patterns** — the 3-5 most common ways people actually use it, ranked by frequency
+- **Power-user techniques** — what experienced users do differently from beginners
+- **Common configurations** — settings, parameters, integrations that come up repeatedly
+- **Anti-patterns** — things people tried that don't work ("don't bother with X setting, it breaks Y")
+- **Evolution patterns** — how usage has changed over time ("used to do X, now everyone does Y")
+
+**Output:** Add a `🔧 USAGE PATTERNS` section to both compact and full output formats when pattern extraction is active. This section sits between strengths/issues and value analysis.
 
 ### Phase 3: Convergence Scoring
 
@@ -100,10 +133,12 @@ If LOW confidence: explicitly caveat the score, recommend the user do additional
 #### Compact Format (for chat):
 ```
 📊 [Product Name] — [Score]/10 ([Confidence])
+📅 Sources: [date range + weighting note]
 
 👤 Best for: [one line]
 🏆 Top strengths: [2-3 bullet points]  
 🚩 Top issues: [2-3 bullet points]
+🔧 How people use it: [2-3 patterns — only if pattern extraction active]
 💰 Best value: [product] at $X.XX/serving
 🔄 Top alternative: [product] — [why]
 💀 Dealbreakers: [none / detail]
@@ -134,6 +169,13 @@ Use this exact template:
 
 ⚠️ NOTABLE CONCERNS (2 sources):
 • [concern] — [sources]
+
+🔧 USAGE PATTERNS (if pattern extraction active):
+• Top pattern: [most common usage approach]
+• Power-user tip: [what experienced users do differently]
+• Common config: [typical setup/settings]
+• Anti-pattern: [what doesn't work]
+• Trend: [how usage has evolved recently]
 
 📊 SOURCE BREAKDOWN:
 • Reddit (r/xxx, N comments): [key takeaway]
@@ -166,8 +208,8 @@ After delivering results, save a summary to `memory/research/[product-name].md` 
 ## Research Depth Modes
 
 - **Quick** — 2-3 searches, Reddit + one expert source, compact output only. Use for: simple Amazon purchases under $50, commodity products, "which brand of X should I get?"
-- **Standard** — Full research loop as described above. Use for: most product/service research, health products, things over $50.
-- **Deep** — Standard + YouTube transcripts + Twitter complaint analysis + sub-agent parallelization. Use for: health/supplement decisions, expensive purchases ($200+), services with ongoing commitments, anything where a wrong choice has real consequences.
+- **Standard** — Full research loop as described above, including X dual-pass and temporal scoping. Use for: most product/service research, health products, things over $50.
+- **Deep** — Standard + YouTube transcripts + full pattern extraction + sub-agent parallelization. Use for: health/supplement decisions, expensive purchases ($200+), services with ongoing commitments, anything where a wrong choice has real consequences.
 
 Auto-select depth based on query context. When unclear, default to Standard.
 

@@ -16,7 +16,7 @@ This methodology is applied after normalizing raw evidence into a claims layer. 
 ### Tier 3 — Moderate Signal (weight: MEDIUM)
 - **Amazon verified purchases** — filter verified only. 2-4 star reviews are most honest (5★ often incentivized, 1★ often emotional/irrelevant).
 - **Google Reviews** — good volume for services/restaurants. Weight recency.
-- **Twitter/X complaints** — people tweet at companies when things break. Great failure signal. Search: `"product" (broken OR terrible OR refund OR worst)`.
+- **Twitter/X (dual pass)** — run both complaint search (`broken OR terrible OR refund OR worst`) AND positive search (`love OR best OR switched to OR game changer`). X catches real-time sentiment shifts, product changes, and usage patterns faster than any other platform. Use CLI first (`node tools/twitter/twitter.js search`), API as fallback.
 
 ### Tier 4 — Low Signal (weight: LOW)
 - **Trustpilot** — companies game it, but patterns still visible in volume.
@@ -127,6 +127,16 @@ Apply these filters when extracting reviews:
 | Durable goods | 3 years | Cast iron, furniture, tools age slowly |
 
 When searching, scope by recency: use `freshness` parameter or append year to search queries for categories with short half-lives.
+
+### Temporal Scoring Rules
+
+Sources are weighted by age relative to their category half-life:
+- **Within half-life:** Full weight
+- **1-2x half-life:** Half weight (note as "older source" in output)
+- **Beyond 2x half-life:** Noted for context only, not scored
+- **Explicit `--recent` / `--since` override:** Only sources within the specified window get full weight. Everything else = context only.
+
+Always report the date range of sources used: "Sources: 8 results from Jan-Mar 2026, 3 from 2025 (half-weighted)."
 
 ## Research History
 
