@@ -138,15 +138,59 @@ Sources are weighted by age relative to their category half-life:
 
 Always report the date range of sources used: "Sources: 8 results from Jan-Mar 2026, 3 from 2025 (half-weighted)."
 
+## Full Output Template
+
+Use this template for file-based reports saved to `memory/research/`:
+
+```
+📊 RESEARCH VERDICT: [Product/Service Name]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🏆 Consensus Score: X.X/10
+🔍 Confidence: HIGH/MEDIUM/LOW
+⚠️ Fake Review Risk: LOW/MEDIUM/HIGH
+
+👤 WHO IS THIS FOR:
+• Best for: [specific use-case/person profile]
+• Not for: [who should avoid and why]
+
+✅ CONFIRMED STRENGTHS (3+ sources agree):
+• [strength] — [which sources confirmed]
+
+🚩 CONFIRMED ISSUES (3+ sources agree):
+• [issue] — [which sources confirmed] — [severity]
+
+⚠️ NOTABLE CONCERNS (2 sources):
+• [concern] — [sources]
+
+🔧 USAGE PATTERNS (if applicable):
+• Top pattern: [most common usage approach]
+• Power-user tip: [what experienced users do differently]
+• Anti-pattern: [what doesn't work]
+
+📊 SOURCE BREAKDOWN:
+• Reddit (r/xxx, N comments): [key takeaway]
+• Amazon (X.X★ verified, N reviews): [key takeaway]
+• [Other sources]: [key takeaway]
+
+💰 VALUE ANALYSIS:
+• [Product A]: $X.XX/serving (container, servings, price)
+• Best value: [product] at $X.XX/serving
+• Best quality-adjusted value: [product] — [reasoning]
+
+🔄 TOP ALTERNATIVES MENTIONED:
+• [competitor] — mentioned N times as preferred, why
+
+💀 DEALBREAKER CHECK:
+• Safety issues: [yes/no + detail]
+• Widespread failures: [yes/no + detail]
+• Customer service: [pattern if found]
+
+📅 Review Freshness: [oldest/newest reviews, temporal relevance]
+
+[VERIFICATION STAMP]
+```
+
 ## Research History
 
-Save all completed research to `memory/research/[product-name-slug].md` with:
-- Date of research
-- Query / what was researched
-- Consensus score + verdict
-- Key confirmed strengths and issues
-- Sources consulted with links
-- "Who Is This For" summary
-- Alternatives identified
-
-This builds a personal review database. Before starting new research, check `memory/research/` for existing entries on the same product/service.
+Save all completed research to `memory/research/[product-name-slug].md` using the template above, with date, query, score, key findings, sources, alternatives. This builds a personal review database — always check it before starting new research.
